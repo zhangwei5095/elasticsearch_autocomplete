@@ -11,7 +11,7 @@ module ElasticsearchAutocomplete
 
         after_save :ac_update_index
         after_destroy :ac_update_index
-        
+
         index_prefix ElasticsearchAutocomplete.defaults[:index_prefix] if ElasticsearchAutocomplete.defaults[:index_prefix]
       end
 
@@ -28,7 +28,7 @@ module ElasticsearchAutocomplete
         self.ac_mode_config = ElasticsearchAutocomplete::MODES[ac_opts[:mode]]
 
         self.ac_search_attrs = ac_opts[:search_fields] || (ac_opts[:localized] ? I18n.available_locales.map { |l| "#{ac_attr}_#{l}" } : [ac_attr])
-        self.ac_search_fields = ac_search_attrs.map { |attr| ac_mode_config.values.map { |prefix| "#{prefix}_#{attr}" } }.flatten
+        self.ac_search_fields = ac_search_attrs.map { |attr| ac_mode_config.values.map { |prefix| "#{attr}.#{prefix}_#{attr}" } }.flatten
 
         define_ac_index(ac_opts[:mode]) unless options[:skip_settings]
       end
@@ -57,6 +57,14 @@ module ElasticsearchAutocomplete
           end
 
           filter(:and, filters: options[:with].map { |k, v| {terms: {k => ElasticsearchAutocomplete.val_to_terms(v)}} }) if options[:with].present?
+
+          if options[:or].present?
+            or_filters = Array(options[:or]).map do |filter|
+              {and: filter.map {|k, v| {terms: {k => ElasticsearchAutocomplete.val_to_terms(v)}}}}
+            end
+            filter(:or, or_filters)
+          end
+
           if options[:without].present?
             options[:without].each do |k, v|
               filter(:not, {terms: {k => ElasticsearchAutocomplete.val_to_terms(v, true)}})
@@ -78,23 +86,24 @@ module ElasticsearchAutocomplete
 
       def ac_index_config(attr, mode=:word)
         defaults = {type: 'string', search_analyzer: 'ac_search', include_in_all: false}
+        index_analyzer_key = ElasticsearchAutocomplete.es2? ? :analyzer : :index_analyzer
         fields = case mode
                    when :word
                      {
                          attr => {type: 'string'},
-                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer: 'ac_edge_ngram'),
-                         "#{ac_mode_config[:word]}_#{attr}" => defaults.merge(index_analyzer: 'ac_edge_ngram_word')
+                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer_key => 'ac_edge_ngram'),
+                         "#{ac_mode_config[:word]}_#{attr}" => defaults.merge(index_analyzer_key => 'ac_edge_ngram_word')
                      }
                    when :phrase
                      {
                          attr => {type: 'string'},
-                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer: 'ac_edge_ngram')
+                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer_key => 'ac_edge_ngram')
                      }
                    when :full
                      {
                          attr => {type: 'string'},
-                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer: 'ac_edge_ngram', boost: 3),
-                         "#{ac_mode_config[:full]}_#{attr}" => defaults.merge(index_analyzer: 'ac_edge_ngram_full')
+                         "#{ac_mode_config[:base]}_#{attr}" => defaults.merge(index_analyzer_key => 'ac_edge_ngram', boost: 3),
+                         "#{ac_mode_config[:full]}_#{attr}" => defaults.merge(index_analyzer_key => 'ac_edge_ngram_full')
                      }
                  end
         {type: 'multi_field', fields: fields}
